@@ -1,0 +1,103 @@
+#!/bin/bash
+function join_by { local IFS="$1"; shift; echo "$*"; }
+
+declare -a MASTERS=("192.168.10.10"
+                    "192.168.10.12"
+                    "192.168.10.20")
+declare -a VOLUMES=("192.168.10.10"
+                    "192.168.10.11"
+                    "192.168.10.12")
+declare -a PEERS=("192.168.10.10"
+                  "192.168.10.11"
+                  "192.168.10.12"
+                  "192.168.10.20")
+
+META_DIR="/data/meta"
+DATA_DIR="/data/db"
+MASTER_PORT=9333
+VOLUME_PORT=10000
+
+#STARTUP MASTERS
+function start_masters {
+  for i in "${!MASTERS[@]}"
+  do
+    MASTER=${MASTERS[$i]}
+    MASTER_PEERS=""
+    for j in "${!MASTERS[@]}"
+    do
+      [[ $j -ne $i ]] && MASTER_PEERS+="${MASTERS[$j]}:$MASTER_PORT,"
+    done
+    MASTER_PEERS=$(echo $MASTER_PEERS | sed 's/\(.*\),/\1 /')
+    ssh "doh@$MASTER" sudo pkill weed
+    ssh "doh@$MASTER" sudo mkdir -p "$META_DIR"
+    ssh "doh@$MASTER" sudo -b "nohup weed master -port=$MASTER_PORT -peers=$MASTER_PEERS -mdir=$META_DIR &>/dev/null" &
+  done
+}
+
+#STARTUP VOLUME-SERVERS
+function start_volume_servers {
+  for VOLUME in "${VOLUMES[@]}"
+  do
+    MSERVERS=""
+    for j in "${!MASTERS[@]}"
+    do
+      MSERVERS+="${MASTERS[$j]}:$MASTER_PORT,"
+    done
+    MSERVERS=$(echo $MSERVERS | sed 's/\(.*\),/\1 /')
+    ssh "doh@$VOLUME" "uname -a"
+    ssh "doh@$VOLUME" sudo -b "nohup weed volume -port=$VOLUME_PORT -index=leveldb -mserver=$MSERVERS -dir=$DATA_DIR &>/dev/null" &
+  done
+}
+
+#STOP VOLUME-SERVERS
+function stop_volume_servers {
+  for VOLUME in "${VOLUMES[@]}"
+  do
+    ssh "doh@$VOLUME" sudo "pkill -f 'weed volume'"
+  done
+}
+
+#STOP ALL
+function stop_all {
+  for MASTER in "${MASTERS[@]}"
+  do
+    ssh "doh@$MASTER" sudo "pkill weed"
+  done
+  for VOLUME in "${VOLUMES[@]}"
+  do
+    ssh "doh@$VOLUME" sudo "pkill weed"
+  done
+}
+
+#CLEAR LOGS
+function clear_logs {
+  for MASTER in "${MASTERS[@]}"
+  do
+    ssh "doh@$MASTER" sudo "find /tmp -type f -name \"weed*\" -delete"
+  done
+  for VOLUME in "${VOLUMES[@]}"
+  do
+    ssh "doh@$VOLUME" sudo "find /tmp -type f -name \"weed*\" -delete"
+  done
+}
+
+function print_help {
+  echo "No or invalid arguments supplied, available commands:"
+  echo ""
+  echo '"start masters" - start the master servers'
+  echo '"start volumes" - start the volume servers'
+  echo '"stop volumes" - stop the volume servers'
+  echo '"start fillers" - start the filler(s)'
+  echo '"stop" - will stop all weed proccesses'
+  echo '"clear logs" - will clear all logs'
+  echo ""
+}
+
+case "$1" in 
+  "start masters") start_masters;;
+  "start volumes") start_volume_servers;;
+  "stop volumes") stop_volume_servers;;
+  "stop") stop_all;;
+  "clear logs") clear_logs;;
+  *) print_help;;
+esac
